@@ -59,12 +59,13 @@ Options:
 
 The MCP server needs environment variables to be set:
 
-* `ES_URL`: the URL of your Elasticsearch cluster
+* `ES_URL`: the URL of your Elasticsearch cluster. Supports multiple URLs separated by commas for connection redundancy (e.g., `https://es1.example.com:9200,https://es2.example.com:9200`)
 * For authentication use either an API key or basic authentication:
   * API key: `ES_API_KEY`
   * Basic auth: `ES_USERNAME` and `ES_PASSWORD`
-* Optionally, `ES_SSL_SKIP_VERIFY` set to `true` skips SSL/TLS certificate verification when connecting
-  to Elasticsearch. The ability to provide a custom certificate will be added in a later version.
+* For SSL/TLS configuration:
+  * `ES_SSL_SKIP_VERIFY` set to `true` skips SSL/TLS certificate verification when connecting to Elasticsearch
+  * `ES_CA_CERT`: Custom CA certificate in PEM format for SSL/TLS connections
 
 The MCP server is started in stdio mode with this command:
 
@@ -100,12 +101,13 @@ Note: streamable-HTTP is recommended, as [SSE is deprecated](https://modelcontex
 
 The MCP server needs environment variables to be set:
 
-* `ES_URL`, the URL of your Elasticsearch cluster
+* `ES_URL`: the URL of your Elasticsearch cluster. Supports multiple URLs separated by commas for connection redundancy (e.g., `https://es1.example.com:9200,https://es2.example.com:9200`)
 * For authentication use either an API key or basic authentication:
   * API key: `ES_API_KEY`
   * Basic auth: `ES_USERNAME` and `ES_PASSWORD`
-* Optionally, `ES_SSL_SKIP_VERIFY` set to `true` skips SSL/TLS certificate verification when connecting
-  to Elasticsearch. The ability to provide a custom certificate will be added in a later version.
+* For SSL/TLS configuration:
+  * `ES_SSL_SKIP_VERIFY` set to `true` skips SSL/TLS certificate verification when connecting to Elasticsearch
+  * `ES_CA_CERT`: Custom CA certificate in PEM format for SSL/TLS connections
 
 The MCP server is started in http mode with this command:
 

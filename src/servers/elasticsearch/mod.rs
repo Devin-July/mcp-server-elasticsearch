@@ -21,7 +21,7 @@ use crate::servers::IncludeExclude;
 use crate::utils::none_if_empty_string;
 use elasticsearch::Elasticsearch;
 use elasticsearch::auth::Credentials;
-use elasticsearch::cert::CertificateValidation;
+use elasticsearch::cert::{Certificate, CertificateValidation};
 use elasticsearch::http::Url;
 use elasticsearch::http::response::Response;
 use http::header::USER_AGENT;
@@ -57,6 +57,9 @@ pub struct ElasticsearchMcpConfig {
     /// Should we skip SSL certificate verification?
     #[serde(default, deserialize_with = "deserialize_bool_from_anything")]
     pub ssl_skip_verify: bool,
+
+    #[serde(default, deserialize_with = "none_if_empty_string")]
+    pub ca_cert: Option<String>,
 
     /// Search templates to expose as tools or resources
     #[serde(default)]
@@ -185,20 +188,29 @@ impl ElasticsearchMcp {
             None
         };
 
-        let url = config.url.as_str();
-        if url.is_empty() {
+        let url_str = config.url.as_str();
+        if url_str.is_empty() {
             return Err(anyhow::Error::msg("Elasticsearch URL is empty"));
         }
 
-        let url = Url::parse(url)?;
+        let urls = parse_multiple_urls(url_str)?;
 
-        let pool = elasticsearch::http::transport::SingleNodeConnectionPool::new(url.clone());
-        let mut transport = elasticsearch::http::transport::TransportBuilder::new(pool);
+        let mut transport = if urls.len() > 1 {
+            let pool = elasticsearch::http::transport::MultiNodeConnectionPool::round_robin(urls, None);
+            elasticsearch::http::transport::TransportBuilder::new(pool)
+        } else {
+            let pool = elasticsearch::http::transport::SingleNodeConnectionPool::new(urls[0].clone());
+            elasticsearch::http::transport::TransportBuilder::new(pool)
+        };
         if let Some(creds) = creds {
             transport = transport.auth(creds);
         }
-        if config.ssl_skip_verify {
-            transport = transport.cert_validation(CertificateValidation::None)
+        if let Some(ca_cert) = config.ca_cert {
+            let cert = Certificate::from_pem(ca_cert.as_bytes())
+                .map_err(|e| anyhow::Error::msg(format!("Invalid CA certificate: {e}")))?;
+            transport = transport.cert_validation(CertificateValidation::Certificate(cert));
+        } else if config.ssl_skip_verify {
+            transport = transport.cert_validation(CertificateValidation::None);
         }
         transport = transport.header(
             USER_AGENT,
@@ -209,6 +221,23 @@ impl ElasticsearchMcp {
 
         Ok(base_tools::EsBaseTools::new(es_client))
     }
+}
+
+fn parse_multiple_urls(url_str: &str) -> anyhow::Result<Vec<Url>> {
+    let urls: Result<Vec<Url>, _> = url_str
+        .split(',')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(Url::parse)
+        .collect();
+    
+    let urls = urls?;
+    
+    if urls.is_empty() {
+        return Err(anyhow::Error::msg("No valid URLs found"));
+    }
+    
+    Ok(urls)
 }
 
 //------------------------------------------------------------------------------------------------
