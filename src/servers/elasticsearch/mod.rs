@@ -175,7 +175,7 @@ pub enum SearchTemplate {
 pub struct ElasticsearchMcp {}
 
 impl ElasticsearchMcp {
-    pub fn new_with_config(config: ElasticsearchMcpConfig) -> anyhow::Result<base_tools::EsBaseTools> {
+    pub async fn new_with_config(config: ElasticsearchMcpConfig) -> anyhow::Result<base_tools::EsBaseTools> {
         let creds = if let Some(api_key) = config.api_key.clone() {
             Some(Credentials::EncodedApiKey(api_key))
         } else if let Some(login) = config.login.clone() {
@@ -207,7 +207,7 @@ impl ElasticsearchMcp {
         let transport = transport.build()?;
         let es_client = Elasticsearch::new(transport);
 
-        Ok(base_tools::EsBaseTools::new(es_client))
+        Ok(base_tools::EsBaseTools::new_with_version_detection(es_client).await?)
     }
 }
 

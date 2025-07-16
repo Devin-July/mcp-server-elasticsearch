@@ -31,9 +31,43 @@ use sse_stream::SseStream;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpListener};
 
 /// Simple smoke test
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn http_tool_list() -> anyhow::Result<()> {
     let addr = find_address()?;
+
+    let router = Router::new().route(
+        "/",
+        axum::routing::get(|| async {
+            axum::Json(json!({
+                "name": "test-node",
+                "cluster_name": "test-cluster",
+                "cluster_uuid": "test-uuid",
+                "version": {
+                    "number": "8.11.0",
+                    "build_flavor": "default",
+                    "build_type": "docker",
+                    "build_hash": "test-hash",
+                    "build_date": "2023-01-01T00:00:00.000Z",
+                    "build_snapshot": false,
+                    "lucene_version": "9.7.0",
+                    "minimum_wire_compatibility_version": "7.17.0",
+                    "minimum_index_compatibility_version": "7.0.0"
+                },
+                "tagline": "You Know, for Search"
+            }))
+        }),
+    );
+
+    let listener = tokio::net::TcpListener::bind(LOCALHOST_0).await?;
+    let es_port = listener.local_addr()?.port();
+
+    unsafe {
+        std::env::set_var("ES_URL", format!("http://127.0.0.1:{}/", es_port));
+    }
+    let server = axum::serve(listener, router);
+    tokio::spawn(async { server.await });
+    
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     let cli = cli::Cli {
         command: cli::Command::Http(cli::HttpCommand {
@@ -79,29 +113,214 @@ async fn http_tool_list() -> anyhow::Result<()> {
     Ok(())
 }
 
-// End-to-end test that spawns a mock ES server and calls the `list_indices` tool via http
-#[tokio::test]
-async fn end_to_end() -> anyhow::Result<()> {
-    // Start an ES mock that will reply to list_indices
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn esql_tool_present_for_supported_version() -> anyhow::Result<()> {
+    let addr = find_address()?;
+
     let router = Router::new().route(
-        "/_cat/indices/{index}",
-        axum::routing::get(async move |headers: HeaderMap, Path(index): Path<String>| {
-            // Check parameter forwarding
-            assert_eq!(index, "test-index");
-            // Check API key
-            assert_eq!(
-                headers.get("Authorization").unwrap().to_str().unwrap(),
-                "ApiKey value-from-the-test"
-            );
-            axum::Json(json!([
-              {
-                "index": "test-index",
-                "status": "open",
-                "docs.count": "100"
-              }
-            ]))
+        "/",
+        axum::routing::get(|| async {
+            axum::Json(json!({
+                "name": "test-node",
+                "cluster_name": "test-cluster",
+                "cluster_uuid": "test-uuid",
+                "version": {
+                    "number": "8.11.0",
+                    "build_flavor": "default",
+                    "build_type": "docker",
+                    "build_hash": "test-hash",
+                    "build_date": "2023-01-01T00:00:00.000Z",
+                    "build_snapshot": false,
+                    "lucene_version": "9.7.0",
+                    "minimum_wire_compatibility_version": "7.17.0",
+                    "minimum_index_compatibility_version": "7.0.0"
+                },
+                "tagline": "You Know, for Search"
+            }))
         }),
     );
+
+    let listener = tokio::net::TcpListener::bind(LOCALHOST_0).await?;
+    let es_port = listener.local_addr()?.port();
+
+    unsafe {
+        std::env::set_var("ES_URL", format!("http://127.0.0.1:{}/", es_port));
+    }
+    let server = axum::serve(listener, router);
+    tokio::spawn(async { server.await });
+    
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    let cli = cli::Cli {
+        command: cli::Command::Http(cli::HttpCommand {
+            config: None,
+            address: Some(addr),
+            sse: false,
+        }),
+    };
+
+    tokio::spawn(async move { cli.run().await });
+
+    let url = format!("http://127.0.0.1:{}/mcp", addr.port());
+
+    let body = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/list"
+    });
+
+    let client = Client::builder().build()?;
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+
+    let response = client
+        .post(url)
+        .header(CONTENT_TYPE, "application/json")
+        .header(ACCEPT, "application/json, text/event-stream")
+        .json(&body)
+        .send()
+        .await?
+        .error_for_status()?;
+
+    let response_body: ListToolsResponse = parse_response(response).await?;
+
+    let names = response_body
+        .result
+        .tools
+        .iter()
+        .map(|t| t.name.as_str())
+        .collect::<Vec<_>>();
+    
+    assert!(names.contains(&"esql"), "ES|QL tool should be present for version 8.11+");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn esql_tool_absent_for_unsupported_version() -> anyhow::Result<()> {
+    let addr = find_address()?;
+
+    let router = Router::new().route(
+        "/",
+        axum::routing::get(|| async {
+            axum::Json(json!({
+                "name": "test-node",
+                "cluster_name": "test-cluster",
+                "cluster_uuid": "test-uuid",
+                "version": {
+                    "number": "8.10.0",
+                    "build_flavor": "default",
+                    "build_type": "docker",
+                    "build_hash": "test-hash",
+                    "build_date": "2023-01-01T00:00:00.000Z",
+                    "build_snapshot": false,
+                    "lucene_version": "9.6.0",
+                    "minimum_wire_compatibility_version": "7.17.0",
+                    "minimum_index_compatibility_version": "7.0.0"
+                },
+                "tagline": "You Know, for Search"
+            }))
+        }),
+    );
+
+    let listener = tokio::net::TcpListener::bind(LOCALHOST_0).await?;
+    let es_port = listener.local_addr()?.port();
+
+    unsafe {
+        std::env::set_var("ES_URL", format!("http://127.0.0.1:{}/", es_port));
+    }
+    let server = axum::serve(listener, router);
+    tokio::spawn(async { server.await });
+    
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    let cli = cli::Cli {
+        command: cli::Command::Http(cli::HttpCommand {
+            config: None,
+            address: Some(addr),
+            sse: false,
+        }),
+    };
+
+    tokio::spawn(async move { cli.run().await });
+
+    let url = format!("http://127.0.0.1:{}/mcp", addr.port());
+
+    let body = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/list"
+    });
+
+    let client = Client::builder().build()?;
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+
+    let response = client
+        .post(url)
+        .header(CONTENT_TYPE, "application/json")
+        .header(ACCEPT, "application/json, text/event-stream")
+        .json(&body)
+        .send()
+        .await?
+        .error_for_status()?;
+
+    let response_body: ListToolsResponse = parse_response(response).await?;
+
+    let names = response_body
+        .result
+        .tools
+        .iter()
+        .map(|t| t.name.as_str())
+        .collect::<Vec<_>>();
+    
+    assert!(!names.contains(&"esql"), "ES|QL tool should be absent for version < 8.11");
+    Ok(())
+}
+
+// End-to-end test that spawns a mock ES server and calls the `list_indices` tool via http
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn end_to_end() -> anyhow::Result<()> {
+    // Start an ES mock that will reply to version detection and list_indices
+    let router = Router::new()
+        .route(
+            "/",
+            axum::routing::get(|| async {
+                axum::Json(json!({
+                    "name": "test-node",
+                    "cluster_name": "test-cluster",
+                    "cluster_uuid": "test-uuid",
+                    "version": {
+                        "number": "8.11.0",
+                        "build_flavor": "default",
+                        "build_type": "docker",
+                        "build_hash": "test-hash",
+                        "build_date": "2023-01-01T00:00:00.000Z",
+                        "build_snapshot": false,
+                        "lucene_version": "9.7.0",
+                        "minimum_wire_compatibility_version": "7.17.0",
+                        "minimum_index_compatibility_version": "7.0.0"
+                    },
+                    "tagline": "You Know, for Search"
+                }))
+            }),
+        )
+        .route(
+            "/_cat/indices/{index}",
+            axum::routing::get(async move |headers: HeaderMap, Path(index): Path<String>| {
+                // Check parameter forwarding
+                assert_eq!(index, "test-index");
+                // Check API key
+                assert_eq!(
+                    headers.get("Authorization").unwrap().to_str().unwrap(),
+                    "ApiKey value-from-the-test"
+                );
+                axum::Json(json!([
+                  {
+                    "index": "test-index",
+                    "status": "open",
+                    "docs.count": "100"
+                  }
+                ]))
+            }),
+        );
 
     let listener = tokio::net::TcpListener::bind(LOCALHOST_0).await?;
 

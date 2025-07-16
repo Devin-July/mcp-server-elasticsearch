@@ -31,19 +31,51 @@ use serde::{Deserialize, Serialize};
 use serde_aux::prelude::*;
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
+use semver::Version;
 
 #[derive(Clone)]
 pub struct EsBaseTools {
     es_client: EsClientProvider,
     tool_router: ToolRouter<EsBaseTools>,
+    es_version: Option<Version>,
 }
 
 impl EsBaseTools {
     pub fn new(es_client: Elasticsearch) -> Self {
         Self {
             es_client: EsClientProvider::new(es_client),
-            tool_router: Self::tool_router(),
+            tool_router: Self::tool_router_with_esql(),
+            es_version: None,
         }
+    }
+
+    pub async fn new_with_version_detection(es_client: Elasticsearch) -> Result<Self, rmcp::Error> {
+        let version = Self::detect_es_version(&es_client).await?;
+        let client_provider = EsClientProvider::new(es_client);
+        
+        let tool_router = if Self::supports_esql(&version) {
+            Self::tool_router_with_esql()
+        } else {
+            Self::tool_router_without_esql()
+        };
+        
+        Ok(Self {
+            es_client: client_provider,
+            tool_router,
+            es_version: Some(version),
+        })
+    }
+
+    async fn detect_es_version(es_client: &Elasticsearch) -> Result<Version, rmcp::Error> {
+        let response = es_client.info().send().await;
+        let info: ElasticsearchInfo = read_json(response).await?;
+        
+        Version::parse(&info.version.number)
+            .map_err(|e| rmcp::Error::internal_error(format!("Failed to parse ES version: {}", e), None))
+    }
+
+    fn supports_esql(version: &Version) -> bool {
+        *version >= Version::new(8, 11, 0)
     }
 }
 
@@ -83,7 +115,7 @@ struct GetShardsParams {
     index: Option<String>,
 }
 
-#[tool_router]
+#[tool_router(router = tool_router_with_esql)]
 impl EsBaseTools {
     //---------------------------------------------------------------------------------------------
     /// Tool: list indices
@@ -396,4 +428,181 @@ pub struct EsqlQueryResponse {
     pub is_partial: Option<bool>,
     pub columns: Vec<Column>,
     pub values: Vec<Vec<Value>>,
+}
+
+
+#[derive(Serialize, Deserialize)]
+pub struct ElasticsearchInfo {
+    pub name: String,
+    pub cluster_name: String,
+    pub cluster_uuid: String,
+    pub version: ElasticsearchVersion,
+    pub tagline: String,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ElasticsearchVersion {
+    pub number: String,
+    pub build_flavor: String,
+    pub build_type: String,
+    pub build_hash: String,
+    pub build_date: String,
+    pub build_snapshot: bool,
+    pub lucene_version: String,
+    pub minimum_wire_compatibility_version: String,
+    pub minimum_index_compatibility_version: String,
+}
+
+#[tool_router(router = tool_router_without_esql)]
+impl EsBaseTools {
+    #[tool(
+        description = "List all available Elasticsearch indices",
+        annotations(title = "List ES indices", read_only_hint = true)
+    )]
+    async fn list_indices_no_esql(
+        &self,
+        req_ctx: RequestContext<RoleServer>,
+        Parameters(ListIndicesParams { index_pattern }): Parameters<ListIndicesParams>,
+    ) -> Result<CallToolResult, rmcp::Error> {
+        let es_client = self.es_client.get(req_ctx);
+        let response = es_client
+            .cat()
+            .indices(CatIndicesParts::Index(&[&index_pattern]))
+            .h(&["index", "status", "docs.count"])
+            .format("json")
+            .send()
+            .await;
+
+        let response: Vec<CatIndexResponse> = read_json(response).await?;
+
+        Ok(CallToolResult::success(vec![
+            Content::text(format!("Found {} indices:", response.len())),
+            Content::json(response)?,
+        ]))
+    }
+
+    #[tool(
+        description = "Get field mappings for a specific Elasticsearch index",
+        annotations(title = "Get ES index mappings", read_only_hint = true)
+    )]
+    async fn get_mappings_no_esql(
+        &self,
+        req_ctx: RequestContext<RoleServer>,
+        Parameters(GetMappingsParams { index }): Parameters<GetMappingsParams>,
+    ) -> Result<CallToolResult, rmcp::Error> {
+        let es_client = self.es_client.get(req_ctx);
+        let response = es_client
+            .indices()
+            .get_mapping(IndicesGetMappingParts::Index(&[&index]))
+            .send()
+            .await;
+
+        let response: MappingResponse = read_json(response).await?;
+
+        let mapping = response.values().next().unwrap();
+
+        Ok(CallToolResult::success(vec![
+            Content::text(format!("Mappings for index {index}:")),
+            Content::json(mapping)?,
+        ]))
+    }
+
+    #[tool(
+        description = "Perform an Elasticsearch search with the provided query DSL.",
+        annotations(title = "Elasticsearch search DSL query", read_only_hint = true)
+    )]
+    async fn search_no_esql(
+        &self,
+        req_ctx: RequestContext<RoleServer>,
+        Parameters(SearchParams {
+            index,
+            fields,
+            query_body,
+        }): Parameters<SearchParams>,
+    ) -> Result<CallToolResult, rmcp::Error> {
+        let es_client = self.es_client.get(req_ctx);
+
+        let mut query_body = query_body;
+
+        if let Some(fields) = fields {
+            if let Some(Value::Array(values)) = query_body.get_mut("_source") {
+                for field in fields.into_iter() {
+                    values.push(Value::String(field))
+                }
+            } else {
+                query_body.insert("_source".to_string(), json!(fields));
+            }
+        }
+
+        let response = es_client
+            .search(SearchParts::Index(&[&index]))
+            .body(query_body)
+            .send()
+            .await;
+
+        let response: SearchResult = read_json(response).await?;
+
+        let mut results: Vec<Content> = Vec::new();
+
+        if response.aggregations.is_empty() || !response.hits.hits.is_empty() {
+            let total = response
+                .hits
+                .total
+                .map(|t| t.value.to_string())
+                .unwrap_or("unknown".to_string());
+
+            results.push(Content::text(format!(
+                "Total results: {}, showing {}.",
+                total,
+                response.hits.hits.len()
+            )));
+        }
+
+        if !response.hits.hits.is_empty() {
+            let sources = response.hits.hits.iter().map(|hit| &hit.source).collect::<Vec<_>>();
+            results.push(Content::json(&sources)?);
+        }
+
+        if !response.aggregations.is_empty() {
+            results.push(Content::text("Aggregations results:"));
+            results.push(Content::json(&response.aggregations)?);
+        }
+
+        Ok(CallToolResult::success(results))
+    }
+
+    #[tool(
+        description = "Get shard information for all or specific indices.",
+        annotations(title = "Get ES shard information", read_only_hint = true)
+    )]
+    async fn get_shards_no_esql(
+        &self,
+        req_ctx: RequestContext<RoleServer>,
+        Parameters(GetShardsParams { index }): Parameters<GetShardsParams>,
+    ) -> Result<CallToolResult, rmcp::Error> {
+        let es_client = self.es_client.get(req_ctx);
+
+        let indices: [&str; 1];
+        let parts = match &index {
+            Some(index) => {
+                indices = [index];
+                CatShardsParts::Index(&indices)
+            }
+            None => CatShardsParts::None,
+        };
+        let response = es_client
+            .cat()
+            .shards(parts)
+            .format("json")
+            .h(&["index", "shard", "prirep", "state", "docs", "store", "node"])
+            .send()
+            .await;
+
+        let response: Vec<CatShardsResponse> = read_json(response).await?;
+
+        Ok(CallToolResult::success(vec![
+            Content::text(format!("Found {} shards:", response.len())),
+            Content::json(response)?,
+        ]))
+    }
 }
