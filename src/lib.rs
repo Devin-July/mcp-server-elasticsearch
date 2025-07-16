@@ -102,7 +102,8 @@ pub async fn setup_services(config: &Option<PathBuf>) -> anyhow::Result<impl Ser
                 "api_key": "${ES_API_KEY:}",
                 "username": "${ES_LOGIN:}",
                 "password": "${ES_PASSWORD:}",
-                "ssl_skip_verify": "${ES_SSL_SKIP_VERIFY:false}"
+                "ssl_skip_verify": "${ES_SSL_SKIP_VERIFY:false}",
+                "ca_cert": "${ES_CA_CERT:}"
             }
         }"#
         .to_string()
@@ -123,6 +124,6 @@ pub async fn setup_services(config: &Option<PathBuf>) -> anyhow::Result<impl Ser
         Err(err) => return Err(err)?,
     };
 
-    let handler = elasticsearch::ElasticsearchMcp::new_with_config(config.elasticsearch)?;
+    let handler = elasticsearch::ElasticsearchMcp::new_with_config(config.elasticsearch).await?;
     Ok(handler)
 }

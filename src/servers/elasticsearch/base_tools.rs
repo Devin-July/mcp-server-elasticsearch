@@ -36,14 +36,24 @@ use std::collections::HashMap;
 pub struct EsBaseTools {
     es_client: EsClientProvider,
     tool_router: ToolRouter<EsBaseTools>,
+    es_version: (u32, u32),
 }
 
 impl EsBaseTools {
     pub fn new(es_client: Elasticsearch) -> Self {
+        Self::new_with_version(es_client, (8, 0))
+    }
+
+    pub fn new_with_version(es_client: Elasticsearch, version: (u32, u32)) -> Self {
         Self {
             es_client: EsClientProvider::new(es_client),
-            tool_router: Self::tool_router(),
+            tool_router: Self::tool_router_with_version(version),
+            es_version: version,
         }
+    }
+
+    fn tool_router_with_version(_version: (u32, u32)) -> ToolRouter<EsBaseTools> {
+        Self::tool_router()
     }
 }
 
@@ -228,6 +238,15 @@ impl EsBaseTools {
         req_ctx: RequestContext<RoleServer>,
         Parameters(EsqlQueryParams { query }): Parameters<EsqlQueryParams>,
     ) -> Result<CallToolResult, rmcp::Error> {
+        if self.es_version.0 < 8 || (self.es_version.0 == 8 && self.es_version.1 < 11) {
+            return Ok(CallToolResult::error(vec![
+                Content::text(format!(
+                    "ES|QL functionality requires Elasticsearch version 8.11 or higher. Current version: {}.{}",
+                    self.es_version.0, self.es_version.1
+                ))
+            ]));
+        }
+
         let es_client = self.es_client.get(req_ctx);
 
         let request = EsqlQueryRequest { query };

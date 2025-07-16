@@ -59,12 +59,17 @@ Options:
 
 The MCP server needs environment variables to be set:
 
-* `ES_URL`: the URL of your Elasticsearch cluster
+* `ES_URL`: the URL of your Elasticsearch cluster (can be comma-separated for multiple URLs)
 * For authentication use either an API key or basic authentication:
   * API key: `ES_API_KEY`
   * Basic auth: `ES_USERNAME` and `ES_PASSWORD`
 * Optionally, `ES_SSL_SKIP_VERIFY` set to `true` skips SSL/TLS certificate verification when connecting
-  to Elasticsearch. The ability to provide a custom certificate will be added in a later version.
+  to Elasticsearch
+* Optionally, `ES_CA_CERT` can be set to a PEM-formatted CA certificate for custom certificate validation
+
+**Version Detection**: The server automatically detects the Elasticsearch version at runtime and conditionally enables features. ES|QL functionality is only available for Elasticsearch versions 8.11 and above.
+
+**Multi-URL Support**: You can specify multiple Elasticsearch URLs by separating them with commas in the `ES_URL` environment variable (e.g., `ES_URL=https://es1.example.com,https://es2.example.com`).
 
 The MCP server is started in stdio mode with this command:
 
@@ -100,12 +105,13 @@ Note: streamable-HTTP is recommended, as [SSE is deprecated](https://modelcontex
 
 The MCP server needs environment variables to be set:
 
-* `ES_URL`, the URL of your Elasticsearch cluster
+* `ES_URL`: the URL of your Elasticsearch cluster (can be comma-separated for multiple URLs)
 * For authentication use either an API key or basic authentication:
   * API key: `ES_API_KEY`
   * Basic auth: `ES_USERNAME` and `ES_PASSWORD`
 * Optionally, `ES_SSL_SKIP_VERIFY` set to `true` skips SSL/TLS certificate verification when connecting
-  to Elasticsearch. The ability to provide a custom certificate will be added in a later version.
+  to Elasticsearch
+* Optionally, `ES_CA_CERT` can be set to a PEM-formatted CA certificate for custom certificate validation
 
 The MCP server is started in http mode with this command:
 
