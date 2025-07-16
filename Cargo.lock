@@ -475,6 +475,7 @@ dependencies = [
  "rmcp",
  "rmcp-macros",
  "schemars",
+ "semver",
  "serde",
  "serde-aux",
  "serde_json",
