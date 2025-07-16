@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::servers::elasticsearch::{EsClientProvider, read_json};
+use crate::servers::elasticsearch::{EsClientProvider, ElasticsearchVersion, read_json};
 use elasticsearch::cat::{CatIndicesParts, CatShardsParts};
 use elasticsearch::indices::IndicesGetMappingParts;
 use elasticsearch::{Elasticsearch, SearchParts};
@@ -36,15 +36,18 @@ use std::collections::HashMap;
 pub struct EsBaseTools {
     es_client: EsClientProvider,
     tool_router: ToolRouter<EsBaseTools>,
+    es_version: ElasticsearchVersion,
 }
 
 impl EsBaseTools {
-    pub fn new(es_client: Elasticsearch) -> Self {
+    pub fn new(es_client: Elasticsearch, es_version: ElasticsearchVersion) -> Self {
         Self {
             es_client: EsClientProvider::new(es_client),
             tool_router: Self::tool_router(),
+            es_version,
         }
     }
+
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -228,6 +231,10 @@ impl EsBaseTools {
         req_ctx: RequestContext<RoleServer>,
         Parameters(EsqlQueryParams { query }): Parameters<EsqlQueryParams>,
     ) -> Result<CallToolResult, rmcp::Error> {
+        if !self.es_version.supports_esql() {
+            return Err(rmcp::Error::invalid_request("ES|QL is not supported in this Elasticsearch version. Requires version 8.11 or higher.", None));
+        }
+
         let es_client = self.es_client.get(req_ctx);
 
         let request = EsqlQueryRequest { query };

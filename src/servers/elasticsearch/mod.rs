@@ -175,7 +175,7 @@ pub enum SearchTemplate {
 pub struct ElasticsearchMcp {}
 
 impl ElasticsearchMcp {
-    pub fn new_with_config(config: ElasticsearchMcpConfig) -> anyhow::Result<base_tools::EsBaseTools> {
+    pub async fn new_with_config(config: ElasticsearchMcpConfig) -> anyhow::Result<base_tools::EsBaseTools> {
         let creds = if let Some(api_key) = config.api_key.clone() {
             Some(Credentials::EncodedApiKey(api_key))
         } else if let Some(login) = config.login.clone() {
@@ -207,7 +207,12 @@ impl ElasticsearchMcp {
         let transport = transport.build()?;
         let es_client = Elasticsearch::new(transport);
 
-        Ok(base_tools::EsBaseTools::new(es_client))
+        let version = detect_elasticsearch_version(&es_client).await.unwrap_or_else(|e| {
+            tracing::warn!("Failed to detect Elasticsearch version: {}. Defaulting to 8.0.0", e);
+            ElasticsearchVersion::new(8, 0, 0)
+        });
+
+        Ok(base_tools::EsBaseTools::new(es_client, version))
     }
 }
 
@@ -251,4 +256,58 @@ pub async fn read_json<T: DeserializeOwned>(
 pub async fn read_text(result: Result<Response, elasticsearch::Error>) -> Result<String, rmcp::Error> {
     let response = handle_error(result)?;
     response.text().await.map_err(internal_error)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ElasticsearchVersion {
+    major: u32,
+    minor: u32,
+    patch: u32,
+}
+
+impl ElasticsearchVersion {
+    pub fn new(major: u32, minor: u32, patch: u32) -> Self {
+        Self { major, minor, patch }
+    }
+    
+    pub fn supports_esql(&self) -> bool {
+        *self >= ElasticsearchVersion::new(8, 11, 0)
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct NodeInfoResponse {
+    nodes: std::collections::HashMap<String, NodeInfo>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct NodeInfo {
+    version: String,
+}
+
+async fn detect_elasticsearch_version(client: &Elasticsearch) -> anyhow::Result<ElasticsearchVersion> {
+    let response = client.nodes().info(elasticsearch::nodes::NodesInfoParts::None).send().await;
+    let response: NodeInfoResponse = read_json(response).await?;
+    
+    let version_string = response.nodes
+        .values()
+        .next()
+        .ok_or_else(|| anyhow::Error::msg("No nodes found in cluster"))?
+        .version
+        .clone();
+        
+    parse_version(&version_string)
+}
+
+fn parse_version(version_str: &str) -> anyhow::Result<ElasticsearchVersion> {
+    let parts: Vec<&str> = version_str.split('.').collect();
+    if parts.len() < 2 {
+        return Err(anyhow::Error::msg("Invalid version format"));
+    }
+    
+    let major = parts[0].parse::<u32>()?;
+    let minor = parts[1].parse::<u32>()?;
+    let patch = parts.get(2).unwrap_or(&"0").parse::<u32>().unwrap_or(0);
+    
+    Ok(ElasticsearchVersion::new(major, minor, patch))
 }

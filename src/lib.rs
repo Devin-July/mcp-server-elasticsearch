@@ -123,6 +123,6 @@ pub async fn setup_services(config: &Option<PathBuf>) -> anyhow::Result<impl Ser
         Err(err) => return Err(err)?,
     };
 
-    let handler = elasticsearch::ElasticsearchMcp::new_with_config(config.elasticsearch)?;
+    let handler = elasticsearch::ElasticsearchMcp::new_with_config(config.elasticsearch).await?;
     Ok(handler)
 }
